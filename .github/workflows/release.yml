@@ -1,0 +1,102 @@
+name: Build and publish Android APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up host Python 3.12 (Chaquopy build interpreter)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Android SDK
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "Using Android SDK at $SDK"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKMGR="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMGR" ]; then SDKMGR="$(command -v sdkmanager)"; fi
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          "$SDKMGR" "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Run host tests (bridge, shim, headless UI)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "sympy==1.14.0" numpy mpmath
+          python -m unittest discover -s tests -v
+
+      - name: Build APK
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Prepare release files
+        id: prep
+        run: |
+          version="${{ inputs.tag || github.ref_name }}"
+          version="${version#v}"
+          apk="ScientificCalculator-android-v${version}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          sha256sum "$apk" > SHA256SUMS.txt
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            ${{ steps.prep.outputs.apk }}
+            SHA256SUMS.txt
+          retention-days: 14
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          cat > release-notes.md <<EOF
+          Android arm64-v8a / x86_64 ${{ steps.prep.outputs.version }}
+
+          Scientific Calculator application build ${{ steps.prep.outputs.version }} for Android.
+
+          Includes the universal APK (arm64-v8a and x86_64) and a SHA-256 checksum.
+
+          This is a faithful Android port that runs the desktop calculator engine and its LCD interface directly; see the repository README for sources and details.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            "${{ steps.prep.outputs.apk }}" \
+            SHA256SUMS.txt \
+            --verify-tag \
+            --title "Scientific Calculator for Android ${{ steps.prep.outputs.version }}" \
+            --notes-file release-notes.md

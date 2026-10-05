@@ -1,0 +1,30 @@
+# Gradle / Android build output
+.gradle/
+build/
+.kotlin/
+local.properties
+*.iml
+.idea/
+captures/
+.cxx/
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Runtime data written by the desktop SettingsStore
+ScientificCalculator/
+*.db
+*.db-journal
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
